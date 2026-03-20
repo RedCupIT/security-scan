@@ -1,0 +1,47 @@
+# Trivy configuration
+# Docs: https://aquasecurity.github.io/trivy/latest/docs/references/configuration/config-file/
+
+# Scanning options
+scan:
+  # Types of security issues to detect
+  security-checks:
+    - vuln        # OS and language package vulnerabilities
+    - secret      # Hardcoded secrets
+    - config      # Misconfigurations (IaC, Dockerfiles, etc.)
+    - license     # License compliance
+
+# Vulnerability options
+vulnerability:
+  # Only report vulnerabilities that have a fix available
+  ignore-unfixed: true
+  # Severity levels to report (CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN)
+  severity:
+    - CRITICAL
+    - HIGH
+    - MEDIUM
+
+# Secret scanning
+secret:
+  config: configs/trivy/trivy-secret.yaml
+
+# Misconfiguration scanning
+misconfiguration:
+  # Include full scan details
+  include-non-failures: false
+
+# Output options
+format: sarif
+
+# Paths/files to skip during scanning
+skip-dirs:
+  - node_modules
+  - .git
+  - vendor
+  - dist
+  - build
+  - .venv
+  - __pycache__
+
+skip-files:
+  - "**/*.test.*"
+  - "**/*.spec.*"

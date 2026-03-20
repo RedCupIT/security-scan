@@ -1,0 +1,314 @@
+name: Org-Wide Security Scan
+
+on:
+  # Triggered by the org webhook relay when a PR is opened/updated
+  # or when a new repo is created in the org.
+  repository_dispatch:
+    types:
+      - pull_request_scan   # PR opened, reopened, or synchronized
+      - repo_created_scan   # New repo created in the org
+
+  # Keep manual trigger for one-off or backfill scans
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Repo to scan (owner/repo)'
+        required: true
+      pr_number:
+        description: 'PR number (leave blank for default branch scan)'
+        required: false
+      sha:
+        description: 'Commit SHA to scan'
+        required: false
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ── Resolve inputs from either dispatch source ───────────────────────────
+  resolve:
+    name: Resolve scan target
+    runs-on: ubuntu-latest
+    outputs:
+      repo:       ${{ steps.resolve.outputs.repo }}
+      sha:        ${{ steps.resolve.outputs.sha }}
+      pr_number:  ${{ steps.resolve.outputs.pr_number }}
+      ref:        ${{ steps.resolve.outputs.ref }}
+    steps:
+      - name: Resolve target
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          # repository_dispatch payloads
+          RD_REPO:      ${{ github.event.client_payload.repo }}
+          RD_SHA:       ${{ github.event.client_payload.sha }}
+          RD_PR:        ${{ github.event.client_payload.pr_number }}
+          RD_REF:       ${{ github.event.client_payload.ref }}
+          # workflow_dispatch inputs
+          WD_REPO:      ${{ inputs.repo }}
+          WD_SHA:       ${{ inputs.sha }}
+          WD_PR:        ${{ inputs.pr_number }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "repo=$WD_REPO"     >> "$GITHUB_OUTPUT"
+            echo "sha=$WD_SHA"       >> "$GITHUB_OUTPUT"
+            echo "pr_number=$WD_PR"  >> "$GITHUB_OUTPUT"
+            echo "ref=refs/heads/main" >> "$GITHUB_OUTPUT"
+          else
+            echo "repo=$RD_REPO"     >> "$GITHUB_OUTPUT"
+            echo "sha=$RD_SHA"       >> "$GITHUB_OUTPUT"
+            echo "pr_number=$RD_PR"  >> "$GITHUB_OUTPUT"
+            echo "ref=$RD_REF"       >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Set pending commit status on the PR ──────────────────────────────────
+  set-pending:
+    name: Set pending status
+    needs: resolve
+    runs-on: ubuntu-latest
+    if: needs.resolve.outputs.pr_number != ''
+    steps:
+      - name: Post pending status — Semgrep
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_SCAN_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: '${{ needs.resolve.outputs.repo }}'.split('/')[0],
+              repo:  '${{ needs.resolve.outputs.repo }}'.split('/')[1],
+              sha:   '${{ needs.resolve.outputs.sha }}',
+              state: 'pending',
+              context: 'security/semgrep',
+              description: 'Semgrep SAST scan in progress...',
+            });
+
+      - name: Post pending status — Trivy
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_SCAN_TOKEN }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: '${{ needs.resolve.outputs.repo }}'.split('/')[0],
+              repo:  '${{ needs.resolve.outputs.repo }}'.split('/')[1],
+              sha:   '${{ needs.resolve.outputs.sha }}',
+              state: 'pending',
+              context: 'security/trivy',
+              description: 'Trivy vulnerability scan in progress...',
+            });
+
+  # ── Semgrep ───────────────────────────────────────────────────────────────
+  semgrep:
+    name: Semgrep SAST
+    needs: [resolve, set-pending]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      findings: ${{ steps.count.outputs.findings }}
+      critical:  ${{ steps.count.outputs.critical }}
+      high:      ${{ steps.count.outputs.high }}
+      medium:    ${{ steps.count.outputs.medium }}
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.repo }}
+          token: ${{ secrets.ORG_SCAN_TOKEN }}
+          ref: ${{ needs.resolve.outputs.sha || needs.resolve.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Run Semgrep
+        id: semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/owasp-top-ten
+            p/secrets
+            p/javascript
+            p/python
+            p/golang
+            p/docker
+            p/terraform
+          generateSarif: true
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        continue-on-error: true
+
+      - name: Count findings
+        id: count
+        run: |
+          if [ -f semgrep.sarif ]; then
+            FINDINGS=$(jq '[.runs[].results[]] | length' semgrep.sarif)
+            CRITICAL=$(jq '[.runs[].results[] | select(.properties.severity == "error")] | length' semgrep.sarif)
+            HIGH=$(jq '[.runs[].results[] | select(.properties.severity == "warning")] | length' semgrep.sarif)
+            MEDIUM=$(jq '[.runs[].results[] | select(.properties.severity == "note")] | length' semgrep.sarif)
+          else
+            FINDINGS=0; CRITICAL=0; HIGH=0; MEDIUM=0
+          fi
+          echo "findings=$FINDINGS" >> "$GITHUB_OUTPUT"
+          echo "critical=$CRITICAL" >> "$GITHUB_OUTPUT"
+          echo "high=$HIGH"         >> "$GITHUB_OUTPUT"
+          echo "medium=$MEDIUM"     >> "$GITHUB_OUTPUT"
+
+      - name: Upload SARIF to target repo
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+        env:
+          GITHUB_TOKEN: ${{ secrets.ORG_SCAN_TOKEN }}
+          GITHUB_REPOSITORY: ${{ needs.resolve.outputs.repo }}
+
+      - name: Update commit status — Semgrep
+        if: always() && needs.resolve.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_SCAN_TOKEN }}
+          script: |
+            const findings = parseInt('${{ steps.count.outputs.findings }}') || 0;
+            const critical = parseInt('${{ steps.count.outputs.critical }}') || 0;
+            await github.rest.repos.createCommitStatus({
+              owner: '${{ needs.resolve.outputs.repo }}'.split('/')[0],
+              repo:  '${{ needs.resolve.outputs.repo }}'.split('/')[1],
+              sha:   '${{ needs.resolve.outputs.sha }}',
+              state:   critical > 0 ? 'failure' : findings > 0 ? 'warning' : 'success',
+              context: 'security/semgrep',
+              description: findings === 0
+                ? 'No issues found'
+                : `${findings} issue(s) found (${critical} critical)`,
+              target_url: `https://github.com/${{ needs.resolve.outputs.repo }}/security/code-scanning`,
+            });
+
+  # ── Trivy ─────────────────────────────────────────────────────────────────
+  trivy:
+    name: Trivy Vulnerability Scan
+    needs: [resolve, set-pending]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      findings: ${{ steps.count.outputs.findings }}
+      critical:  ${{ steps.count.outputs.critical }}
+      high:      ${{ steps.count.outputs.high }}
+      medium:    ${{ steps.count.outputs.medium }}
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ needs.resolve.outputs.repo }}
+          token: ${{ secrets.ORG_SCAN_TOKEN }}
+          ref: ${{ needs.resolve.outputs.sha || needs.resolve.outputs.ref }}
+
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Count findings
+        id: count
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            FINDINGS=$(jq '[.runs[].results[]] | length' trivy-results.sarif)
+            CRITICAL=$(jq '[.runs[].results[] | select(.properties.severity == "error")] | length' trivy-results.sarif)
+            HIGH=$(jq '[.runs[].results[] | select(.properties.severity == "warning")] | length' trivy-results.sarif)
+            MEDIUM=$(jq '[.runs[].results[] | select(.properties.severity == "note")] | length' trivy-results.sarif)
+          else
+            FINDINGS=0; CRITICAL=0; HIGH=0; MEDIUM=0
+          fi
+          echo "findings=$FINDINGS" >> "$GITHUB_OUTPUT"
+          echo "critical=$CRITICAL" >> "$GITHUB_OUTPUT"
+          echo "high=$HIGH"         >> "$GITHUB_OUTPUT"
+          echo "medium=$MEDIUM"     >> "$GITHUB_OUTPUT"
+
+      - name: Upload SARIF to target repo
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+        env:
+          GITHUB_TOKEN: ${{ secrets.ORG_SCAN_TOKEN }}
+          GITHUB_REPOSITORY: ${{ needs.resolve.outputs.repo }}
+
+      - name: Update commit status — Trivy
+        if: always() && needs.resolve.outputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_SCAN_TOKEN }}
+          script: |
+            const findings = parseInt('${{ steps.count.outputs.findings }}') || 0;
+            const critical = parseInt('${{ steps.count.outputs.critical }}') || 0;
+            await github.rest.repos.createCommitStatus({
+              owner: '${{ needs.resolve.outputs.repo }}'.split('/')[0],
+              repo:  '${{ needs.resolve.outputs.repo }}'.split('/')[1],
+              sha:   '${{ needs.resolve.outputs.sha }}',
+              state:   critical > 0 ? 'failure' : findings > 0 ? 'warning' : 'success',
+              context: 'security/trivy',
+              description: findings === 0
+                ? 'No vulnerabilities found'
+                : `${findings} vulnerability(s) found (${critical} critical)`,
+              target_url: `https://github.com/${{ needs.resolve.outputs.repo }}/security/code-scanning`,
+            });
+
+  # ── Post PR comment with combined summary ─────────────────────────────────
+  pr-comment:
+    name: Post PR summary
+    needs: [resolve, semgrep, trivy]
+    if: always() && needs.resolve.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post or update PR comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.ORG_SCAN_TOKEN }}
+          script: |
+            const [owner, repo] = '${{ needs.resolve.outputs.repo }}'.split('/');
+            const pr_number = parseInt('${{ needs.resolve.outputs.pr_number }}');
+
+            const semgrepFindings = parseInt('${{ needs.semgrep.outputs.findings }}') || 0;
+            const semgrepCritical = parseInt('${{ needs.semgrep.outputs.critical }}') || 0;
+            const semgrepHigh     = parseInt('${{ needs.semgrep.outputs.high }}')     || 0;
+            const semgrepMedium   = parseInt('${{ needs.semgrep.outputs.medium }}')   || 0;
+
+            const trivyFindings = parseInt('${{ needs.trivy.outputs.findings }}') || 0;
+            const trivyCritical = parseInt('${{ needs.trivy.outputs.critical }}') || 0;
+            const trivyHigh     = parseInt('${{ needs.trivy.outputs.high }}')     || 0;
+            const trivyMedium   = parseInt('${{ needs.trivy.outputs.medium }}')   || 0;
+
+            const totalCritical = semgrepCritical + trivyCritical;
+            const overallIcon   = totalCritical > 0 ? '🔴' : (semgrepFindings + trivyFindings) > 0 ? '🟡' : '🟢';
+            const overallStatus = totalCritical > 0 ? 'Action required' : (semgrepFindings + trivyFindings) > 0 ? 'Review recommended' : 'All clear';
+
+            const semgrepIcon = semgrepCritical > 0 ? '🔴' : semgrepFindings > 0 ? '🟡' : '🟢';
+            const trivyIcon   = trivyCritical > 0   ? '🔴' : trivyFindings > 0   ? '🟡' : '🟢';
+
+            const securityUrl = `https://github.com/${owner}/${repo}/security/code-scanning`;
+            const runUrl      = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            const body = `<!-- security-scan-bot -->
+            ## ${overallIcon} Security Scan Results — ${overallStatus}
+
+            | Scanner | Critical | High | Medium | Total | Status |
+            |---------|:--------:|:----:|:------:|:-----:|--------|
+            | ${semgrepIcon} Semgrep (SAST) | ${semgrepCritical} | ${semgrepHigh} | ${semgrepMedium} | ${semgrepFindings} | ${semgrepFindings === 0 ? 'Clean ✅' : 'Issues found'} |
+            | ${trivyIcon} Trivy (vulns + secrets) | ${trivyCritical} | ${trivyHigh} | ${trivyMedium} | ${trivyFindings} | ${trivyFindings === 0 ? 'Clean ✅' : 'Issues found'} |
+
+            ${(semgrepFindings + trivyFindings) > 0 ? `> View full findings in the [Security tab](${securityUrl}).` : ''}
+
+            <sub>Scan run: [#${{ github.run_number }}](${runUrl}) · Commit: \`${{ needs.resolve.outputs.sha }}\`</sub>`;
+
+            // Find and update existing comment, or create a new one
+            const comments = await github.rest.issues.listComments({ owner, repo, issue_number: pr_number });
+            const existing = comments.data.find(c => c.body.includes('<!-- security-scan-bot -->'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr_number, body });
+            }

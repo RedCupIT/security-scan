@@ -1,0 +1,44 @@
+name: Reusable — Trivy Scan
+
+on:
+  workflow_call:
+    inputs:
+      severity:
+        description: 'Comma-separated severity levels to report'
+        required: false
+        default: 'CRITICAL,HIGH,MEDIUM'
+        type: string
+      ignore-unfixed:
+        description: 'Ignore vulnerabilities with no fix available'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  trivy:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: ${{ inputs.severity }}
+          ignore-unfixed: ${{ inputs.ignore-unfixed }}
+          exit-code: 0
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy

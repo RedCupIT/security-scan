@@ -1,0 +1,10 @@
+name = "security-scan-relay"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# Set secrets via: wrangler secret put GITHUB_WEBHOOK_SECRET
+# Set secrets via: wrangler secret put GITHUB_TOKEN
+# Set vars below (non-sensitive):
+
+[vars]
+SECURITY_SCAN_REPO = "YOUR_ORG/security-scan"

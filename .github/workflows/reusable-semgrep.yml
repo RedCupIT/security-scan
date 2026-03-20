@@ -1,0 +1,43 @@
+name: Reusable — Semgrep Scan
+
+on:
+  workflow_call:
+    secrets:
+      SEMGREP_APP_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Copy Semgrep config
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.ORG_NAME }}/security-scan
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: .security-scan-config
+          sparse-checkout: configs/semgrep
+
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: .security-scan-config/configs/semgrep/semgrep.yml
+          generateSarif: true
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep

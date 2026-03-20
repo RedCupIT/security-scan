@@ -1,0 +1,35 @@
+# Semgrep rule configuration for org-wide scanning
+# Docs: https://semgrep.dev/docs/writing-rules/rule-syntax/
+
+rules:
+  # ── Ruleset references ──────────────────────────────────────────────────────
+  # Pull in Semgrep's maintained security rulesets.
+  # Remove any that don't apply to your org's tech stack.
+
+  - id: semgrep-security-audit
+    patterns:
+      - pattern: "..."
+    message: placeholder — replaced by ruleset imports below
+    languages: [generic]
+    severity: INFO
+
+# Rulesets to import (configured via semgrep-action `config` input or CLI)
+# These are passed as the `config` value in the workflow:
+#
+#   p/owasp-top-ten        — OWASP Top 10
+#   p/secrets              — Hardcoded secrets / credentials
+#   p/javascript           — JS/TS security rules
+#   p/python               — Python security rules
+#   p/java                 — Java security rules
+#   p/golang               — Go security rules
+#   p/docker               — Dockerfile best practices
+#   p/terraform            — Terraform IaC security
+#   p/kubernetes           — Kubernetes manifest checks
+#   p/supply-chain         — Dependency confusion / typosquatting
+#
+# To use multiple rulesets, set the workflow `config` input to a space-separated list:
+#   config: >-
+#     p/owasp-top-ten
+#     p/secrets
+#     p/javascript
+#     p/python
