@@ -117,21 +117,24 @@ jobs:
           ref: ${{ needs.resolve.outputs.sha || needs.resolve.outputs.ref }}
           fetch-depth: 0
 
+      - name: Install Semgrep
+        run: pip install semgrep
+
       - name: Run Semgrep
         id: semgrep
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: >-
-            p/owasp-top-ten
-            p/secrets
-            p/javascript
-            p/python
-            p/golang
-            p/docker
-            p/terraform
-          generateSarif: true
-        env:
-          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          semgrep scan \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --config p/javascript \
+            --config p/python \
+            --config p/golang \
+            --config p/docker \
+            --config p/terraform \
+            --sarif \
+            --output semgrep.sarif \
+            --no-error \
+            .
         continue-on-error: true
 
       - name: Count findings
