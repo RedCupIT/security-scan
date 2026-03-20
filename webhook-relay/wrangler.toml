@@ -7,4 +7,4 @@ compatibility_date = "2024-01-01"
 # Set vars below (non-sensitive):
 
 [vars]
-SECURITY_SCAN_REPO = "YOUR_ORG/security-scan"
+SECURITY_SCAN_REPO = "RedCupIT/security-scan"
