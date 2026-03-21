@@ -5,8 +5,8 @@ on:
   # or when a new repo is created in the org.
   repository_dispatch:
     types:
-      - pull_request_scan   # PR opened, reopened, or synchronized
-      - repo_created_scan   # New repo created in the org
+      - pull_request_scan    # PR opened, reopened, or synchronized
+      - default_branch_scan  # Push directly to default branch (incl. first push to a new repo)
 
   # Keep manual trigger for one-off or backfill scans
   workflow_dispatch:

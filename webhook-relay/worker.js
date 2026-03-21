@@ -46,17 +46,19 @@ export default {
       };
     }
 
-    // ── New repository created in the org ─────────────────────────────────
-    if (event === 'repository' && payload.action === 'created') {
-      dispatchType = 'repo_created_scan';
-      clientPayload = {
-        repo: payload.repository.full_name,
-        sha:  payload.repository.default_branch
-          ? null  // will be resolved to HEAD of default branch
-          : null,
-        ref:       `refs/heads/${payload.repository.default_branch || 'main'}`,
-        pr_number: '',
-      };
+    // ── Push to default branch (covers new repos on first push and direct-to-main commits) ──
+    if (event === 'push' && !payload.deleted) {
+      const defaultBranch = payload.repository.default_branch || 'main';
+      const pushedRef = payload.ref; // e.g. "refs/heads/main"
+      if (pushedRef === `refs/heads/${defaultBranch}`) {
+        dispatchType = 'default_branch_scan';
+        clientPayload = {
+          repo:      payload.repository.full_name,
+          sha:       payload.after,
+          ref:       pushedRef,
+          pr_number: '',
+        };
+      }
     }
 
     if (!dispatchType) {
