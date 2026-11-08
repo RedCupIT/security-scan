@@ -12,13 +12,13 @@ on:
   workflow_dispatch:
     inputs:
       repo:
-        description: 'Repo to scan (owner/repo)'
+        description: Repo to scan (owner/repo)
         required: true
       pr_number:
-        description: 'PR number (leave blank for default branch scan)'
+        description: PR number (leave blank for default branch scan)
         required: false
       sha:
-        description: 'Commit SHA to scan'
+        description: Commit SHA to scan
         required: false
 
 permissions:
@@ -31,24 +31,24 @@ jobs:
     name: Resolve scan target
     runs-on: ubuntu-24.04
     outputs:
-      repo:       ${{ steps.resolve.outputs.repo }}
-      sha:        ${{ steps.resolve.outputs.sha }}
-      pr_number:  ${{ steps.resolve.outputs.pr_number }}
-      ref:        ${{ steps.resolve.outputs.ref }}
+      repo: ${{ steps.resolve.outputs.repo }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      ref: ${{ steps.resolve.outputs.ref }}
     steps:
       - name: Resolve target
         id: resolve
         env:
           EVENT: ${{ github.event_name }}
           # repository_dispatch payloads
-          RD_REPO:      ${{ github.event.client_payload.repo }}
-          RD_SHA:       ${{ github.event.client_payload.sha }}
-          RD_PR:        ${{ github.event.client_payload.pr_number }}
-          RD_REF:       ${{ github.event.client_payload.ref }}
+          RD_REPO: ${{ github.event.client_payload.repo }}
+          RD_SHA: ${{ github.event.client_payload.sha }}
+          RD_PR: ${{ github.event.client_payload.pr_number }}
+          RD_REF: ${{ github.event.client_payload.ref }}
           # workflow_dispatch inputs
-          WD_REPO:      ${{ inputs.repo }}
-          WD_SHA:       ${{ inputs.sha }}
-          WD_PR:        ${{ inputs.pr_number }}
+          WD_REPO: ${{ inputs.repo }}
+          WD_SHA: ${{ inputs.sha }}
+          WD_PR: ${{ inputs.pr_number }}
         run: |
           if [ "$EVENT" = "workflow_dispatch" ]; then
             echo "repo=$WD_REPO"     >> "$GITHUB_OUTPUT"
@@ -98,6 +98,7 @@ jobs:
             });
 
   # ── Semgrep ───────────────────────────────────────────────────────────────
+    environment: ci
   semgrep:
     name: Semgrep SAST
     needs: [resolve, set-pending]
@@ -105,9 +106,9 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       findings: ${{ steps.count.outputs.findings }}
-      critical:  ${{ steps.count.outputs.critical }}
-      high:      ${{ steps.count.outputs.high }}
-      medium:    ${{ steps.count.outputs.medium }}
+      critical: ${{ steps.count.outputs.critical }}
+      high: ${{ steps.count.outputs.high }}
+      medium: ${{ steps.count.outputs.medium }}
     steps:
       - name: Checkout target repo
         uses: actions/checkout@v4
@@ -184,6 +185,7 @@ jobs:
             });
 
   # ── Trivy ─────────────────────────────────────────────────────────────────
+    environment: ci
   trivy:
     name: Trivy Vulnerability Scan
     needs: [resolve, set-pending]
@@ -191,9 +193,9 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       findings: ${{ steps.count.outputs.findings }}
-      critical:  ${{ steps.count.outputs.critical }}
-      high:      ${{ steps.count.outputs.high }}
-      medium:    ${{ steps.count.outputs.medium }}
+      critical: ${{ steps.count.outputs.critical }}
+      high: ${{ steps.count.outputs.high }}
+      medium: ${{ steps.count.outputs.medium }}
     steps:
       - name: Checkout target repo
         uses: actions/checkout@v4
@@ -260,6 +262,7 @@ jobs:
             });
 
   # ── Post PR comment with combined summary ─────────────────────────────────
+    environment: ci
   pr-comment:
     name: Post PR summary
     needs: [resolve, semgrep, trivy]
@@ -315,3 +318,4 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number: pr_number, body });
             }
+    environment: ci
