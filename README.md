@@ -151,11 +151,37 @@ Enter `owner/repo` and optionally a SHA or PR number.
 
 ---
 
+## Gheist detector (SEC-502)
+
+`gheist-detector.yml` runs daily at 06:17 UTC (and on demand) and sweeps every non-archived org repo, read-only:
+
+- **Deleted runs:** gaps in `run_number` per workflow, for runs in the last 26h (7 days of history for context). A gap is a lead; confirm in the org audit log (`workflows.delete_workflow_run`).
+- **Secret-dump workflows:** workflow files on **every branch** matching `toJSON(secrets)`, `${{ secrets }}`, `printenv`, `env | base64/grep/...`, `base64 -w0`, `xxd`, `/proc/*/environ`, or curl posting `secrets.*`.
+- **Unknown actors:** runs whose actor or triggering actor is not in the allowlist.
+
+Findings go to the job summary, a `gheist-findings` artifact, Slack `#team_information-security` and a new Linear SEC issue. No findings means no posts.
+
+It authenticates with a read-only GitHub App installation token (`actions:read`, `contents:read`), not a PAT. Setup (org owner):
+
+| Name | Kind | Value |
+|------|------|-------|
+| `GHEIST_APP_ID` | Variable | App ID of an org-owned GitHub App with Actions: read, Contents: read, Metadata: read, installed on all repos |
+| `GHEIST_APP_PRIVATE_KEY` | Secret | That app's private key |
+| `GHEIST_SLACK_BOT_TOKEN` | Secret | Slack bot token with `chat:write`, bot invited to the channel |
+| `GHEIST_LINEAR_API_KEY` | Secret | Linear API key that can create issues in the InfoSec team |
+| `GHEIST_ALLOWED_ACTORS` | Variable (optional) | Comma-separated logins; defaults to the SEC-498 allowlist |
+| `GHEIST_SLACK_CHANNEL` | Variable (optional) | Channel ID; defaults to `CD7MTR4JF` |
+
+Local dry run: `GH_TOKEN=... DRY_RUN=true python3 scripts/gheist_detector.py`.
+
+---
+
 ## File structure
 
 ```
 .github/workflows/
   org-security-scan.yml       # Main workflow (event-driven)
+  gheist-detector.yml         # Daily Gheist detector (SEC-502)
   reusable-semgrep.yml        # Optional: call from individual repos
   reusable-trivy.yml          # Optional: call from individual repos
 configs/
@@ -163,6 +189,8 @@ configs/
   trivy/
     trivy.yaml                # Trivy scan configuration
     trivy-secret.yaml         # Custom secret detection rules
+scripts/
+  gheist_detector.py          # Gheist detector logic (stdlib only)
 webhook-relay/
   worker.js                   # Cloudflare Worker relay
   wrangler.toml               # Cloudflare deployment config
