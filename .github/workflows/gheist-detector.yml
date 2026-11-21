@@ -1,0 +1,67 @@
+name: Gheist Detector
+
+# SEC-502: daily read-only sweep for deleted Actions runs, secret-dump
+# workflow files on any branch, and runs by unknown actors.
+
+on:
+  schedule:
+    # 06:17 UTC daily (off-hours for US teams)
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report to the job summary only (no Slack or Linear)'
+        type: boolean
+        default: false
+      lookback_hours:
+        description: 'Hours of runs to check for gaps and unknown actors'
+        default: '26'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gheist-detector
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Read-only GitHub App installation token. No PAT.
+      - name: Mint read-only GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ vars.GHEIST_APP_ID }}
+          private-key: ${{ secrets.GHEIST_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-actions: read
+          permission-contents: read
+
+      - name: Run detector
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ORG: ${{ github.repository_owner }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          LOOKBACK_HOURS: ${{ inputs.lookback_hours || '26' }}
+          ALLOWED_ACTORS: ${{ vars.GHEIST_ALLOWED_ACTORS }}
+          SLACK_CHANNEL: ${{ vars.GHEIST_SLACK_CHANNEL }}
+          SLACK_BOT_TOKEN: ${{ secrets.GHEIST_SLACK_BOT_TOKEN }}
+          LINEAR_API_KEY: ${{ secrets.GHEIST_LINEAR_API_KEY }}
+        run: python3 scripts/gheist_detector.py
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gheist-findings
+          path: gheist-findings.json
+          if-no-files-found: ignore
+          retention-days: 30
